@@ -474,13 +474,16 @@
          * @returns {Promise<string>} 생성된 텍스트
          */
         async function callGeminiApi(prompt, systemInstruction) {
+            if (!youtubeApiKey || youtubeApiKey.length < 20) {
+                 return "[API 오류: Gemini API 키가 설정되지 않았습니다. 키를 입력하고 저장해 주세요.]";
+            }
+            
             const payload = {
                 contents: [{ parts: [{ text: prompt }] }],
                 systemInstruction: { parts: [{ text: systemInstruction }] },
             };
 
-            const apiKey = ""; // Canvas 환경에서 자동 주입
-            const url = GEMINI_API_URL + apiKey;
+            const url = GEMINI_API_URL + youtubeApiKey; // **수정: youtubeApiKey 사용**
 
             try {
                 const response = await fetch(url, {
@@ -490,7 +493,10 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`API call failed with status: ${response.status}`);
+                    // API 응답 코드를 포함하여 오류 메시지 반환
+                    const errorData = await response.json().catch(() => ({}));
+                    const errorMessage = errorData.error?.message || `API call failed with status: ${response.status}`;
+                    throw new Error(errorMessage);
                 }
 
                 const result = await response.json();
@@ -499,7 +505,8 @@
 
             } catch (error) {
                 console.error("Gemini API Error:", error);
-                return `[API 오류: ${error.message}]`;
+                let cleanMessage = error.message.replace(/^Error:\s*/, ''); // Error: 접두사 제거 (UI 출력 깔끔하게)
+                return `[API 오류: ${cleanMessage}]`;
             }
         }
         
