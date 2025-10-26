@@ -28,6 +28,15 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        /* 버튼 내 로딩 스피너 */
+        .spinner-sm {
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-left-color: #fff;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s linear infinite;
+            border-radius: 50%;
+        }
         /* 모달 오버레이 */
         .modal-overlay {
             position: fixed;
@@ -454,13 +463,53 @@
         }
 
         // =================================================================
+        // Gemini API 로직 (번역 및 요약용)
+        // =================================================================
+        const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=';
+
+        /**
+         * Gemini API를 호출하여 텍스트를 생성합니다.
+         * @param {string} prompt - LLM에 전달할 사용자 프롬프트
+         * @param {string} systemInstruction - LLM의 역할을 정의하는 시스템 지침
+         * @returns {Promise<string>} 생성된 텍스트
+         */
+        async function callGeminiApi(prompt, systemInstruction) {
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                systemInstruction: { parts: [{ text: systemInstruction }] },
+            };
+
+            const apiKey = ""; // Canvas 환경에서 자동 주입
+            const url = GEMINI_API_URL + apiKey;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "요청 처리 중 오류가 발생했습니다.";
+                return text.trim();
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                return `[API 오류: ${error.message}]`;
+            }
+        }
+        
+        // =================================================================
         // 클립보드 복사 로직
         // =================================================================
 
         /**
          * 태그를 클립보드에 복사하고 피드백을 제공합니다.
-         * @param {string} tagsString - 복사할 쉼표로 구분된 태그 문자열
-         * @param {HTMLElement} buttonElement - 버튼 요소
+         * (기존 로직 유지)
          */
         function copyTagsToClipboard(tagsString, buttonElement) {
             const tempInput = document.createElement('textarea');
@@ -496,7 +545,6 @@
                 buttonElement.className = originalClasses;
             }, 2000);
         }
-
 
         // =================================================================
         // 검색 및 분석 로직 (3단계 요청)
@@ -627,7 +675,8 @@
                         thumbnailUrl: snippet.thumbnails?.medium?.url || '',
                         viewCount: parseInt(statistics.viewCount) || 0,
                         likeCount: parseInt(statistics.likeCount) || 0, // 좋아요 수 추가
-                        duration: formatDuration(contentDetails.duration)
+                        duration: formatDuration(contentDetails.duration),
+                        description: snippet.description || "영상 설명이 제공되지 않았습니다." // 요약에 사용할 설명 추가
                     };
                 });
                 
@@ -699,7 +748,7 @@
                 ` : '';
 
                 const videoCard = `
-                    <div class="bg-white p-4 rounded-xl shadow-lg flex flex-col md:flex-row gap-4 border-l-4 border-blue-500 hover:shadow-xl transition duration-200">
+                    <div id="video-${video.id}" class="bg-white p-4 rounded-xl shadow-lg flex flex-col md:flex-row gap-4 border-l-4 border-blue-500 hover:shadow-xl transition duration-200">
                         
                         <!-- 썸네일 및 길이 (좌측) -->
                         <div class="relative w-full md:w-56 flex-shrink-0">
@@ -712,9 +761,19 @@
                         <!-- 내용 (우측) -->
                         <div class="flex-grow">
                             <!-- 제목 -->
-                            <h3 class="text-lg font-bold text-gray-900 mb-1 line-clamp-2">
-                                <a href="${videoLink}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 transition duration-150">${video.title}</a>
-                            </h3>
+                            <div class="flex items-center mb-1">
+                                <h3 class="text-lg font-bold text-gray-900 line-clamp-2 mr-2">
+                                    <a href="${videoLink}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 transition duration-150">${video.title}</a>
+                                </h3>
+                                <!-- 번역 버튼 -->
+                                <button data-id="${video.id}" data-type="translate" data-title="${video.title.replace(/"/g, '&quot;')}" class="action-btn text-xs bg-gray-100 text-gray-600 hover:bg-blue-500 hover:text-white font-semibold py-1 px-2 rounded-full transition duration-150 active:scale-95 flex items-center">
+                                    <span class="action-text">번역</span>
+                                </button>
+                                <!-- 요약 버튼 -->
+                                <button data-id="${video.id}" data-type="summary" data-description="${video.description.replace(/"/g, '&quot;')}" class="action-btn text-xs bg-gray-100 text-gray-600 hover:bg-blue-500 hover:text-white font-semibold py-1 px-2 rounded-full ml-1 transition duration-150 active:scale-95 flex items-center">
+                                    <span class="action-text">요약</span>
+                                </button>
+                            </div>
                             
                             <!-- 채널명 및 날짜 -->
                             <p class="text-sm text-blue-600 font-medium mb-2">
@@ -730,6 +789,12 @@
                                     좋아요: <span class="text-red-500">${formatNumber(video.likeCount)}</span>개
                                 </span>
                             </div>
+                            
+                            <!-- 요약/번역 결과 표시 영역 -->
+                            <div id="result-area-${video.id}" class="hidden mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-gray-800">
+                                <div id="result-content-${video.id}"></div>
+                            </div>
+
 
                             <!-- 태그 목록 및 복사 버튼 -->
                             <div class="mt-2 pt-2 border-t border-gray-100">
@@ -748,6 +813,63 @@
             });
         }
 
+        // =================================================================
+        // 이벤트 핸들러 (Gemini API 호출)
+        // =================================================================
+        
+        async function handleActionClick(button) {
+            const videoId = button.dataset.id;
+            const type = button.dataset.type;
+            const resultArea = document.getElementById(`result-area-${videoId}`);
+            const resultContent = document.getElementById(`result-content-${videoId}`);
+            const actionText = button.querySelector('.action-text');
+
+            // 토글 로직: 이미 열려있다면 닫기
+            if (!resultArea.classList.contains('hidden') && button.dataset.currentType === type) {
+                resultArea.classList.add('hidden');
+                button.dataset.currentType = '';
+                return;
+            }
+            
+            // 로딩 상태 시작
+            const originalText = actionText.textContent;
+            actionText.innerHTML = '<div class="spinner-sm"></div>';
+            button.disabled = true;
+
+            resultArea.classList.remove('hidden');
+            resultContent.innerHTML = `<p class="text-gray-500">요청 중...</p>`;
+            
+            let result = '';
+            let systemPrompt = '';
+            let userPrompt = '';
+            
+            if (type === 'translate') {
+                const title = button.dataset.title;
+                systemPrompt = "You are a professional Korean translator. Translate the given text naturally and concisely into Korean, outputting only the translated title.";
+                userPrompt = `Translate the following YouTube video title into Korean: "${title}"`;
+                result = await callGeminiApi(userPrompt, systemPrompt);
+                
+                resultContent.innerHTML = `<p class="font-bold mb-1">제목 번역 결과:</p><p class="whitespace-pre-wrap">${result}</p>`;
+            } else if (type === 'summary') {
+                const description = button.dataset.description;
+                
+                if (description === "영상 설명이 제공되지 않았습니다." || description.trim().length < 10) {
+                    result = "영상의 설명이 너무 짧거나 제공되지 않아 요약할 수 없습니다. (요약은 영상의 설명(Description)을 기반으로 합니다.)";
+                } else {
+                    systemPrompt = "You are a professional video content summarizer. Summarize the provided text (video description) into three concise Korean bullet points. Output only the bullet points.";
+                    userPrompt = `다음 YouTube 영상 설명(Description)을 한국어로 간결하게 3가지 핵심 요약해 주세요:\n\n---\n\n${description}`;
+                    result = await callGeminiApi(userPrompt, systemPrompt);
+                }
+
+                resultContent.innerHTML = `<p class="font-bold mb-1">설명 요약 결과:</p><div class="whitespace-pre-wrap">${result}</div>`;
+            }
+
+            // 로딩 상태 종료
+            actionText.textContent = originalText;
+            button.disabled = false;
+            button.dataset.currentType = type; // 현재 활성화된 타입 기록
+        }
+        
         // =================================================================
         // 이벤트 리스너 등록
         // =================================================================
@@ -779,14 +901,22 @@
             saveApiKey(key);
         });
 
-        // 4. 태그 복사 버튼 (이벤트 위임 사용)
+        // 4. 태그 복사, 번역, 요약 버튼 (이벤트 위임 사용)
         resultsList.addEventListener('click', (event) => {
-            const button = event.target.closest('.copy-tags-btn');
-            if (button) {
-                const tagsString = button.dataset.tags;
+            // 태그 복사 버튼 처리
+            const copyButton = event.target.closest('.copy-tags-btn');
+            if (copyButton) {
+                const tagsString = copyButton.dataset.tags;
                 if (tagsString) {
-                    copyTagsToClipboard(tagsString, button);
+                    copyTagsToClipboard(tagsString, copyButton);
                 }
+                return;
+            }
+            
+            // 번역/요약 버튼 처리
+            const actionButton = event.target.closest('.action-btn');
+            if (actionButton) {
+                handleActionClick(actionButton);
             }
         });
         
