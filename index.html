@@ -185,7 +185,10 @@
                         <option value="KR">대한민국</option>
                         <option value="US">미국</option>
                         <option value="JP">일본</option>
+                        <option value="GB">영국</option>
+                        <option value="DE">독일</option>
                         <option value="CN">중국</option>
+                        <option value="VN">베트남</option>
                         <option value="TH">태국</option>
                     </select>
                 </div>
@@ -496,11 +499,11 @@
 
 
         // =================================================================
-        // 검색 및 분석 로직 (2단계 요청)
+        // 검색 및 분석 로직 (3단계 요청)
         // =================================================================
 
         /**
-         * YouTube 검색 API (Step 1)를 호출하고, 그 결과를 바탕으로 Videos API (Step 2)를 호출하여 최종 데이터를 가져옵니다.
+         * YouTube 검색 API (Step 1)를 호출하고, 그 결과를 바탕으로 Videos API (Step 2), Channels API (Step 3)를 호출하여 최종 데이터를 가져옵니다.
          */
         async function runSearchAndAnalysis() {
             // youtubeApiKey가 기본값(하드코딩된 키)이거나 Firestore에서 로드된 유효한 키여야 검색 실행
@@ -533,18 +536,13 @@
                 // --- Step 1: Search API 호출 (영상 ID 목록 및 기본 메타데이터 가져오기) ---
                 let searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(keyword)}&type=video&maxResults=${maxResults}&order=${sortBy}&key=${youtubeApiKey}`;
                 
-                // Duration 필터 (API에서 가능한 경우만 적용)
                 if (videoDuration !== 'any') {
                     searchUrl += `&videoDuration=${videoDuration}`;
                 }
-
-                // Period 필터 (publishedAfter 계산)
                 const publishedAfter = calculatePublishedAfter(dateRange);
                 if (publishedAfter) {
                     searchUrl += `&publishedAfter=${publishedAfter}`;
                 }
-
-                // Region 필터
                 if (regionCode) {
                     searchUrl += `&regionCode=${regionCode}`;
                 }
@@ -566,7 +564,11 @@
 
                 const videoIds = searchData.items
                     .map(item => item.id.videoId)
-                    .filter(id => id); // 유효한 ID만 추출
+                    .filter(id => id); 
+                
+                const channelIds = searchData.items
+                    .map(item => item.snippet.channelId)
+                    .filter(id => id);
 
                 if (videoIds.length === 0) {
                      messageBox.textContent = `⚠️ 키워드 "${keyword}"에 대한 검색 결과가 없습니다.`;
@@ -574,7 +576,7 @@
                     return;
                 }
 
-                // --- Step 2: Videos API 호출 (조회수, 길이, 상세 태그 가져오기) ---
+                // --- Step 2: Videos API 호출 (조회수, 좋아요 수, 길이, 상세 태그 가져오기) ---
                 const videoIdsString = videoIds.join(',');
                 const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoIdsString}&key=${youtubeApiKey}`;
 
@@ -587,21 +589,44 @@
                     return;
                 }
 
-                // --- Step 3: 데이터 통합 및 클라이언트 필터링 ---
+                // --- Step 3: Channels API 호출 (구독자 수 가져오기) ---
+                const uniqueChannelIds = [...new Set(channelIds)];
+                const channelsIdsString = uniqueChannelIds.join(',');
+                const channelsUrl = `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelsIdsString}&key=${youtubeApiKey}`;
+                
+                const channelsResponse = await fetch(channelsUrl);
+                const channelsData = await channelsResponse.json();
+
+                if (channelsData.error) {
+                    console.error(`Channels API 오류: ${channelsData.error.message}`);
+                    // Channels API 오류는 검색 중단 없이 경고만 표시
+                }
+                
+                const channelStats = {};
+                if (channelsData.items) {
+                    channelsData.items.forEach(channel => {
+                        channelStats[channel.id] = parseInt(channel.statistics.subscriberCount) || 0;
+                    });
+                }
+                
+                // --- Step 4: 데이터 통합 및 클라이언트 필터링 ---
                 let finalResults = videosData.items.map(video => {
                     const snippet = video.snippet || {};
                     const statistics = video.statistics || {};
                     const contentDetails = video.contentDetails || {};
+                    const channelId = snippet.channelId;
 
                     return {
                         id: video.id,
                         title: snippet.title,
                         publishedAt: snippet.publishedAt,
                         channelTitle: snippet.channelTitle,
-                        description: snippet.description,
+                        channelId: channelId,
+                        subscriberCount: channelStats[channelId] || 0, // 구독자 수 추가
                         tags: snippet.tags || [],
                         thumbnailUrl: snippet.thumbnails?.medium?.url || '',
                         viewCount: parseInt(statistics.viewCount) || 0,
+                        likeCount: parseInt(statistics.likeCount) || 0, // 좋아요 수 추가
                         duration: formatDuration(contentDetails.duration)
                     };
                 });
@@ -609,7 +634,7 @@
                 // 최소 조회수 클라이언트 필터링 적용
                 const filteredResults = finalResults.filter(video => video.viewCount >= minViews);
                 
-                // --- Step 4: 결과 렌더링 ---
+                // --- Step 5: 결과 렌더링 ---
                 renderResults(filteredResults, keyword);
 
             } catch (error) {
@@ -642,6 +667,10 @@
                 const videoLink = `https://www.youtube.com/watch?v=${video.id}`;
                 const publishedDate = new Date(video.publishedAt).toLocaleDateString('ko-KR');
                 const rawTagsString = video.tags.join(', '); // 복사용 쉼표 구분 문자열
+                
+                const subCountDisplay = video.subscriberCount > 0 
+                    ? `<span class="text-xs text-red-500 font-bold ml-2">(${formatNumber(video.subscriberCount)} 구독자)</span>` 
+                    : '';
 
                 // 1. 태그 목록 생성 및 순위 계산 (CRITICAL)
                 let tagsHtml = video.tags.map((tag, index) => {
@@ -688,11 +717,18 @@
                             </h3>
                             
                             <!-- 채널명 및 날짜 -->
-                            <p class="text-sm text-blue-600 font-medium mb-2">${video.channelTitle} · ${publishedDate} 업로드</p>
+                            <p class="text-sm text-blue-600 font-medium mb-2">
+                                ${video.channelTitle} ${subCountDisplay} · ${publishedDate} 업로드
+                            </p>
 
-                            <!-- 조회수 -->
-                            <div class="text-md font-semibold text-green-600 mb-3">
-                                조회수: ${formatNumber(video.viewCount)}회
+                            <!-- 통계 (조회수 및 좋아요) -->
+                            <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-3">
+                                <span class="font-semibold text-gray-700">
+                                    조회수: <span class="text-green-600">${formatNumber(video.viewCount)}</span>회
+                                </span>
+                                <span class="font-semibold text-gray-700">
+                                    좋아요: <span class="text-red-500">${formatNumber(video.likeCount)}</span>개
+                                </span>
                             </div>
 
                             <!-- 태그 목록 및 복사 버튼 -->
