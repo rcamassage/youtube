@@ -246,7 +246,10 @@
         let db;
         let auth;
         let userId = 'anonymous'; 
-        let youtubeApiKey = '';
+        
+        // NOTE: The user has requested to hardcode this key for testing purposes to bypass immediate API key input errors.
+        const DEFAULT_YOUTUBE_API_KEY = 'AIzaSyDe0emcV4KC675d04fgKn1bmFPdXldpdxE';
+        let youtubeApiKey = DEFAULT_YOUTUBE_API_KEY; // Pre-fill with the user-provided key
 
         // DOM 요소 캐시
         const searchKeywordInput = document.getElementById('searchKeyword');
@@ -322,11 +325,12 @@
                 const docSnap = await getDoc(keyDocRef);
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    youtubeApiKey = data.key;
-                    console.log("API Key loaded successfully.");
+                    youtubeApiKey = data.key; // Load from Firestore if exists
+                    console.log("API Key loaded successfully from Firestore.");
                 } else {
-                    console.log("No stored API Key found.");
-                    showApiKeyModal(true); 
+                    console.log("No stored API Key found. Using default hardcoded key.");
+                    // youtubeApiKey는 이미 DEFAULT_YOUTUBE_API_KEY로 설정되어 있으므로 별도 설정 불필요
+                    showApiKeyModal(true); // 키 입력 창은 띄워서 확인하도록 유도
                 }
             } catch (e) {
                 console.error("Error loading API key:", e);
@@ -360,6 +364,10 @@
         
         function showApiKeyModal(show) {
             if (show) {
+                // 현재 youtubeApiKey 값을 입력 필드에 자동 채움 (기본값 또는 Firestore에서 로드된 값)
+                if (youtubeApiKey !== '') {
+                    apiKeyInput.value = youtubeApiKey;
+                }
                 apiKeyModal.classList.remove('hidden');
                 apiKeyInput.focus();
             } else {
@@ -495,7 +503,8 @@
          * YouTube 검색 API (Step 1)를 호출하고, 그 결과를 바탕으로 Videos API (Step 2)를 호출하여 최종 데이터를 가져옵니다.
          */
         async function runSearchAndAnalysis() {
-            if (!youtubeApiKey) {
+            // youtubeApiKey가 기본값(하드코딩된 키)이거나 Firestore에서 로드된 유효한 키여야 검색 실행
+            if (!youtubeApiKey || youtubeApiKey.length < 20) {
                 messageBox.textContent = "🚨 YouTube API 키를 먼저 입력하고 저장해야 합니다.";
                 showApiKeyModal(true);
                 return;
