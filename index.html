@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>YouTube 검색 + Google 트렌드 연동</title>
+  <title>YouTube 검색 - 고급옵션 및 키워드 순위</title>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body{font-family:Inter,system-ui;background:#0f1724;color:#e6eef6;margin:0;padding:20px}
@@ -70,32 +70,24 @@
     <h3>유튜브 키워드 검색 순위</h3>
     <label>기간:
       <select id="rankRange">
-        <option value="now 1-d">최근 1일</option>
-        <option value="now 7-d">최근 1주</option>
-        <option value="today 1-m">최근 1개월</option>
+        <option value="day">최근 1일</option>
+        <option value="week">최근 1주</option>
+        <option value="month">최근 1개월</option>
       </select>
     </label>
     <label>지역:
       <select id="regionSelect">
         <option value="KR">한국</option>
         <option value="US">미국</option>
-        <option value="JP">일본</option>
-        <option value="GB">영국</option>
-        <option value="FR">프랑스</option>
-        <option value="DE">독일</option>
-        <option value="IN">인도</option>
-        <option value="BR">브라질</option>
-        <option value="CA">캐나다</option>
-        <option value="AU">호주</option>
+        <option value="TH">태국</option>
+        <option value="CN">중국</option>
       </select>
     </label>
     <button id="loadKeywordRank">조회</button>
     <div id="rankResults"></div>
   </div>
 </div>
-<script type="module">
-import { getDailyTrends, getRelatedQueries } from 'https://cdn.jsdelivr.net/npm/google-trends-api-browser@1.1.1/+esm';
-
+<script>
 const STORAGE_KEY='AIzaSyDe0emcV4KC675d04fgKn1bmFPdXldpdxE';
 function getApiKey(){return localStorage.getItem(STORAGE_KEY)||prompt('API 키를 입력하세요');}
 let allResults=[];
@@ -122,6 +114,7 @@ async function doSearch(){
   }
 
   document.getElementById('status').textContent='검색 중...';
+
   const params=new URLSearchParams({key:API_KEY,q,part:'snippet',type:'video',maxResults:max,order});
   if(publishedAfter)params.set('publishedAfter',publishedAfter);
 
@@ -194,43 +187,30 @@ document.getElementById('downloadExcel').addEventListener('click',()=>{
   XLSX.writeFile(wb,'youtube_results.xlsx');
 });
 
-// 키워드 순위 보기 (Google Trends 연동)
+// 키워드 순위 보기 (Google Trends API는 공개적으로 접근 불가하므로 예시용 Mock 데이터)
 const keywordBtn=document.getElementById('keywordRankBtn');
 const panel=document.getElementById('keywordPanel');
 keywordBtn.addEventListener('click',()=>{
   panel.style.display=panel.style.display==='none'||panel.style.display===''?'block':'none';
 });
 
-document.getElementById('loadKeywordRank').addEventListener('click',async()=>{
+document.getElementById('loadKeywordRank').addEventListener('click',()=>{
   const period=document.getElementById('rankRange').value;
   const region=document.getElementById('regionSelect').value;
-  const query=document.getElementById('query').value.trim();
   const rankDiv=document.getElementById('rankResults');
-  rankDiv.innerHTML='<p>Google 트렌드 데이터를 불러오는 중...</p>';
+  rankDiv.innerHTML='<p>순위 데이터를 불러오는 중...</p>';
 
-  try{
-    const trends=await getDailyTrends({geo:region});
-    const json=JSON.parse(trends);
-    const list=json.default.trendingSearchesDays[0].trendingSearches.map((v,i)=>({rank:i+1,keyword:v.title.query}));
-
-    // 입력 키워드의 순위 계산
-    const idx=list.findIndex(v=>v.keyword.includes(query));
-    let msg='';
-    if(idx!==-1){msg=`입력한 키워드(“${query}”)는 ${idx+1}위에 있습니다.`;}else{msg='입력한 키워드는 현재 상위 트렌드에 없습니다.';}
-
-    // 관련 키워드
-    const related=await getRelatedQueries({keyword:query,geo:region,time:period});
-    const rjson=JSON.parse(related);
-    const rel=rjson.default.rankedList[0].rankedKeyword.map((v,i)=>({rank:i+1,keyword:v.query,score:v.value[0]}));
-
-    rankDiv.innerHTML=`<p>${msg}</p><h4>현재 트렌드 키워드 TOP10</h4>`+
-      list.slice(0,10).map(v=>`<div class='rank-item'><span>${v.rank}. ${v.keyword}</span></div>`).join('')+
-      `<h4>관련 키워드</h4>`+
-      rel.slice(0,10).map(v=>`<div class='rank-item'><span>${v.rank}. ${v.keyword}</span><span>${v.score}</span></div>`).join('');
-  }catch(e){
-    rankDiv.innerHTML='<p>Google 트렌드 데이터를 불러오는데 실패했습니다.</p>';
-    console.error(e);
-  }
+  // 실제 API는 Google Trends 등을 연동해야 함. 여기서는 예시용 Mock.
+  setTimeout(()=>{
+    const mock=[
+      {keyword:'아이폰 16',score:98},
+      {keyword:'갤럭시 S25',score:93},
+      {keyword:'유튜브 쇼츠',score:88},
+      {keyword:'AI 영상편집',score:80},
+      {keyword:'게임 리뷰',score:75}
+    ];
+    rankDiv.innerHTML=mock.map((k,i)=>`<div class='rank-item'><span>${i+1}. ${k.keyword}</span><span>${k.score}</span></div>`).join('');
+  },1000);
 });
 </script>
 </body>
