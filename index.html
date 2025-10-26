@@ -287,6 +287,11 @@
         const minViewsInput = document.getElementById('minViews');
         const regionCodeSelect = document.getElementById('regionCode');
         const tagInclusionCheckbox = document.getElementById('tagInclusion');
+        
+        // =================================================================
+        // 국가 코드 매핑은 2자리 코드 사용을 위해 제거되었습니다.
+        // =================================================================
+
 
         // =================================================================
         // Firebase 및 API Key 관리 로직 (기존 유지)
@@ -631,7 +636,7 @@
                     return;
                 }
 
-                // --- Step 2: Videos API 호출 (조회수, 좋아요 수, 길이, 상세 태그 가져오기) ---
+                // --- Step 2: Videos API 호출 (조회수, 좋아요 수, 길이, 상세 태그, 댓글 수 가져오기) ---
                 const videoIdsString = videoIds.join(',');
                 const videosUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoIdsString}&key=${youtubeApiKey}`;
 
@@ -644,10 +649,11 @@
                     return;
                 }
 
-                // --- Step 3: Channels API 호출 (구독자 수 가져오기) ---
+                // --- Step 3: Channels API 호출 (구독자 수, 국가 가져오기) ---
                 const uniqueChannelIds = [...new Set(channelIds)];
                 const channelsIdsString = uniqueChannelIds.join(',');
-                const channelsUrl = `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelsIdsString}&key=${youtubeApiKey}`;
+                // part=snippet 추가하여 국가 정보를 가져옵니다.
+                const channelsUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id=${channelsIdsString}&key=${youtubeApiKey}`;
                 
                 const channelsResponse = await fetch(channelsUrl);
                 const channelsData = await channelsResponse.json();
@@ -660,7 +666,10 @@
                 const channelStats = {};
                 if (channelsData.items) {
                     channelsData.items.forEach(channel => {
-                        channelStats[channel.id] = parseInt(channel.statistics.subscriberCount) || 0;
+                        channelStats[channel.id] = {
+                            subscribers: parseInt(channel.statistics?.subscriberCount) || 0,
+                            country: channel.snippet?.country || 'N/A' // 국가 정보 추출
+                        };
                     });
                 }
                 
@@ -670,6 +679,7 @@
                     const statistics = video.statistics || {};
                     const contentDetails = video.contentDetails || {};
                     const channelId = snippet.channelId;
+                    const stats = channelStats[channelId] || {};
 
                     return {
                         id: video.id,
@@ -677,13 +687,15 @@
                         publishedAt: snippet.publishedAt,
                         channelTitle: snippet.channelTitle,
                         channelId: channelId,
-                        subscriberCount: channelStats[channelId] || 0, // 구독자 수 추가
+                        subscriberCount: stats.subscribers || 0,
+                        channelCountry: stats.country || 'N/A', // 국가 정보 추가
                         tags: snippet.tags || [],
                         thumbnailUrl: snippet.thumbnails?.medium?.url || '',
                         viewCount: parseInt(statistics.viewCount) || 0,
-                        likeCount: parseInt(statistics.likeCount) || 0, // 좋아요 수 추가
+                        likeCount: parseInt(statistics.likeCount) || 0,
+                        commentCount: parseInt(statistics.commentCount) || 0, // 댓글 수 추가
                         duration: formatDuration(contentDetails.duration),
-                        description: snippet.description || "영상 설명이 제공되지 않았습니다." // 요약에 사용할 설명 추가
+                        description: snippet.description || "영상 설명이 제공되지 않았습니다." 
                     };
                 });
                 
@@ -724,6 +736,12 @@
                 const publishedDate = new Date(video.publishedAt).toLocaleDateString('ko-KR');
                 const rawTagsString = video.tags.join(', '); // 복사용 쉼표 구분 문자열
                 
+                const channelLink = `https://www.youtube.com/channel/${video.channelId}`; // 채널 링크
+                
+                // 국가 코드 -> 단축어 (2자리 코드) 사용으로 롤백 (수정된 부분)
+                const countryCode = video.channelCountry;
+                const countryDisplay = countryCode !== 'N/A' ? `<span class="text-gray-500 font-medium ml-1">(${countryCode})</span>` : ''; // 국가 표시 (2자리 코드)
+                
                 const subCountDisplay = video.subscriberCount > 0 
                     ? `<span class="text-xs text-red-500 font-bold ml-2">(${formatNumber(video.subscriberCount)} 구독자)</span>` 
                     : '';
@@ -741,7 +759,8 @@
                             break; // 첫 번째 일치하는 키워드만 순위 표시
                         }
                     }
-                    return `<span class="bg-gray-200 text-gray-700 text-xs font-medium px-2 py-1 rounded-md inline-block mr-2 mb-1">${tag}</span>${rankBadge}`;
+                    // 태그에 data-tag-value 속성을 추가하고 버튼으로 변경하여 클릭 가능하게 만듭니다.
+                    return `<button class="tag-search-btn bg-gray-200 text-gray-700 text-xs font-medium px-2 py-1 rounded-md inline-block mr-2 mb-1 hover:bg-blue-300 transition duration-150 active:scale-95" data-tag-value="${tag.replace(/"/g, '&quot;')}">${tag}</button>${rankBadge}`;
                 }).join('');
 
                 const copyButtonHtml = video.tags.length > 0 ? `
@@ -784,16 +803,19 @@
                             
                             <!-- 채널명 및 날짜 -->
                             <p class="text-sm text-blue-600 font-medium mb-2">
-                                ${video.channelTitle} ${subCountDisplay} · ${publishedDate} 업로드
+                                <a href="${channelLink}" target="_blank" rel="noopener noreferrer" class="hover:underline">${video.channelTitle}</a> ${countryDisplay} ${subCountDisplay} · ${publishedDate} 업로드
                             </p>
 
-                            <!-- 통계 (조회수 및 좋아요) -->
+                            <!-- 통계 (조회수, 좋아요, 댓글 수) -->
                             <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-3">
                                 <span class="font-semibold text-gray-700">
                                     조회수: <span class="text-green-600">${formatNumber(video.viewCount)}</span>회
                                 </span>
                                 <span class="font-semibold text-gray-700">
                                     좋아요: <span class="text-red-500">${formatNumber(video.likeCount)}</span>개
+                                </span>
+                                <span class="font-semibold text-gray-700">
+                                    댓글 수: <span class="text-indigo-600">${formatNumber(video.commentCount)}</span>개
                                 </span>
                             </div>
                             
@@ -863,12 +885,14 @@
                 if (description === "영상 설명이 제공되지 않았습니다." || description.trim().length < 10) {
                     result = "영상의 설명이 너무 짧거나 제공되지 않아 요약할 수 없습니다. (요약은 영상의 설명(Description)을 기반으로 합니다.)";
                 } else {
-                    systemPrompt = "You are a professional video content summarizer. Summarize the provided text (video description) into three concise Korean bullet points. Output only the bullet points.";
-                    userPrompt = `다음 YouTube 영상 설명(Description)을 한국어로 간결하게 3가지 핵심 요약해 주세요:\n\n---\n\n${description}`;
+                    // 사용자 요청에 따라 요약 길이를 5~8 문장 길이의 단락으로 늘림 (최대 10줄 이내)
+                    systemPrompt = "You are a professional video content summarizer. Summarize the provided text (video description) into a concise paragraph of 5 to 8 sentences in Korean. Output only the summarized paragraph.";
+                    userPrompt = `다음 YouTube 영상 설명(Description)을 한국어로 5~8 문장 길이의 단락으로 요약해 주세요:\n\n---\n\n${description}`;
                     result = await callGeminiApi(userPrompt, systemPrompt);
                 }
 
-                resultContent.innerHTML = `<p class="font-bold mb-1">설명 요약 결과:</p><div class="whitespace-pre-wrap">${result}</div>`;
+                // 단락 스타일로 변경하여 긴 요약에 대응
+                resultContent.innerHTML = `<p class="font-bold mb-1">설명 요약 결과:</p><p class="whitespace-pre-wrap">${result}</p>`;
             }
 
             // 로딩 상태 종료
@@ -908,7 +932,7 @@
             saveApiKey(key);
         });
 
-        // 4. 태그 복사, 번역, 요약 버튼 (이벤트 위임 사용)
+        // 4. 태그 복사, 번역, 요약, 태그 검색 버튼 (이벤트 위임 사용)
         resultsList.addEventListener('click', (event) => {
             // 태그 복사 버튼 처리
             const copyButton = event.target.closest('.copy-tags-btn');
@@ -924,6 +948,16 @@
             const actionButton = event.target.closest('.action-btn');
             if (actionButton) {
                 handleActionClick(actionButton);
+            }
+
+            // 태그 검색 버튼 처리 (새로운 기능)
+            const tagButton = event.target.closest('.tag-search-btn');
+            if (tagButton) {
+                const tagValue = tagButton.dataset.tagValue;
+                if (tagValue) {
+                    searchKeywordInput.value = tagValue; // 검색 키워드 필드에 태그 값 설정
+                    runSearchAndAnalysis(); // 검색 실행
+                }
             }
         });
         
