@@ -219,9 +219,28 @@
         // Firestore 로깅 활성화 (디버깅 목적)
         setLogLevel('debug');
 
-        // Global variables provided by the Canvas environment
+        // GitHub/외부 환경에서 Firebase를 초기화하기 위한 더미 설정 또는 사용자 입력 설정
+        const dummyFirebaseConfig = {
+            apiKey: "YOUR_FIREBASE_API_KEY", // 실제 키로 대체해야 합니다.
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+
+        // Global variables provided by the Canvas environment (with fallback for external hosting)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // __firebase_config가 정의되지 않았거나 파싱에 실패하면 dummyFirebaseConfig를 사용합니다.
+        const firebaseConfig = (() => {
+            try {
+                return typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : dummyFirebaseConfig;
+            } catch (e) {
+                console.warn("Failed to parse __firebase_config. Using dummy configuration.", e);
+                return dummyFirebaseConfig;
+            }
+        })();
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         let db;
@@ -259,17 +278,22 @@
         // =================================================================
         
         async function initializeFirebase() {
-            if (!firebaseConfig) {
-                console.error("Firebase configuration is missing.");
-                messageBox.textContent = "Firebase 설정이 누락되어 데이터를 저장할 수 없습니다.";
-                return;
+            // 외부 호스팅 시, dummyFirebaseConfig에 실제 값이 입력되지 않으면 Firestore 기능 사용 불가 경고
+            if (firebaseConfig === dummyFirebaseConfig && firebaseConfig.apiKey === "YOUR_FIREBASE_API_KEY") {
+                console.warn("🚨 Firebase 설정이 기본값입니다. 키 저장 기능은 Canvas 외부에서 작동하지 않을 수 있습니다.");
+                messageBox.textContent = "Firebase 설정이 기본값입니다. API 키 저장을 위해서는 Firebase 설정을 직접 입력해야 합니다.";
+                
+                // Canvas 외부에서는 인증이 성공하지 못하므로 익명으로 강제 설정
+                userId = crypto.randomUUID(); // 고유 ID로 설정하여 키 저장소 경로만 생성
             }
-
+            
             try {
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
+                // initialAuthToken이 있을 때만 Custom Token 인증 시도 (Canvas 환경)
+                // 없을 경우 익명 인증 시도 (외부 환경, 혹은 인증 토큰 없는 경우)
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
@@ -281,11 +305,13 @@
                     console.log("Firebase initialized and user signed in. UID:", userId);
                     await loadApiKey();
                 } else {
-                    console.warn("Firebase initialized, but no user is signed in.");
+                    // 익명 인증도 실패하면 userId를 임시 고유 ID로 유지
+                    console.warn("Firebase initialized, but no user is signed in. Using temporary UUID for storage context.");
                 }
             } catch (error) {
                 console.error("Firebase Initialization Error:", error);
-                messageBox.textContent = "Firebase 초기화 중 오류가 발생했습니다. 키를 저장할 수 없습니다.";
+                // Firebase 초기화 실패 시 메시지 박스에 출력
+                messageBox.textContent = "Firebase 초기화 중 오류가 발생했습니다. 키 저장이 불가능합니다.";
             }
         }
         
@@ -304,6 +330,8 @@
                 }
             } catch (e) {
                 console.error("Error loading API key:", e);
+                // 오류 발생 시 모달을 띄워 사용자에게 키 입력 유도
+                showApiKeyModal(true); 
             }
         }
 
@@ -325,7 +353,7 @@
                 console.log("API Key saved successfully to Firestore.");
             } catch (e) {
                 console.error("Error saving API key:", e);
-                modalMessage.textContent = `키 저장 중 오류 발생: ${e.message}`;
+                modalMessage.textContent = `키 저장 중 오류 발생: ${e.message}. Firebase 설정이 올바른지 확인해 주세요.`;
                 modalMessage.classList.remove('hidden');
             }
         }
