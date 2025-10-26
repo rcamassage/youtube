@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>YouTube 검색 + Google 트렌드 연동</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body{font-family:Inter,system-ui;background:#0f1724;color:#e6eef6;margin:0;padding:20px}
+    .wrap{max-width:1200px;margin:0 auto}
+    h1{margin:0 0 10px 0}
+    .searchbar{display:flex;gap:8px;flex-wrap:wrap}
+    input,select,button{padding:8px 10px;border-radius:8px;border:1px solid #333;background:#1b2538;color:#fff}
+    button{cursor:pointer}
+    .options{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+    .results{margin-top:20px;display:flex;flex-direction:column;gap:10px}
+    .card{display:grid;grid-template-columns:180px 1fr 80px 80px 180px 1fr;align-items:start;gap:10px;background:#1b2538;padding:10px;border-radius:10px}
+    .thumb{position:relative;width:160px}
+    .thumb img{width:160px;height:90px;object-fit:cover;border-radius:8px;display:block}
+    .duration{position:absolute;bottom:5px;right:8px;background:rgba(0,0,0,0.7);color:#fff;font-size:12px;padding:2px 5px;border-radius:4px}
+    .title{font-weight:600;color:#0af;text-decoration:none;display:block;margin-top:6px;font-size:13px}
+    .meta{font-size:13px;color:#aaa}
+    .tags{font-size:12px;color:#999}
+    .desc{font-size:13px;color:#ccc}
+    #keywordPanel{background:#1b2538;padding:15px;border-radius:10px;margin-top:20px;display:none}
+    .rank-item{display:flex;justify-content:space-between;border-bottom:1px solid #333;padding:5px 0;font-size:14px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>YouTube 검색</h1>
+  <div class="searchbar">
+    <input id="query" type="search" placeholder="검색어 입력" style="flex:1" />
+    <button id="searchBtn">검색</button>
+    <button id="keywordRankBtn">키워드 순위 보기</button>
+  </div>
+  <div class="options">
+    <label>표시 수:
+      <select id="maxResults">
+        <option value="5">5</option>
+        <option value="10" selected>10</option>
+        <option value="25">25</option>
+        <option value="50">50</option>
+      </select>
+    </label>
+    <label>기간:
+      <select id="timeRange">
+        <option value="">전체</option>
+        <option value="hour">최근 1시간</option>
+        <option value="day">최근 1일</option>
+        <option value="week">최근 1주</option>
+        <option value="month">최근 1개월</option>
+        <option value="year">최근 1년</option>
+      </select>
+    </label>
+    <label>정렬:
+      <select id="sortSelect">
+        <option value="relevance">관련도</option>
+        <option value="viewCount">조회수</option>
+        <option value="date">최신순</option>
+      </select>
+    </label>
+    <button id="sortViews">조회수순</button>
+    <button id="sortDate">게시일순</button>
+    <button id="downloadExcel">엑셀(xlsx)로 다운로드</button>
+  </div>
+  <div id="status" class="meta"></div>
+  <div id="results" class="results"></div>
+  <div id="keywordPanel">
+    <h3>유튜브 키워드 검색 순위</h3>
+    <label>기간:
+      <select id="rankRange">
+        <option value="now 1-d">최근 1일</option>
+        <option value="now 7-d">최근 1주</option>
+        <option value="today 1-m">최근 1개월</option>
+      </select>
+    </label>
+    <label>지역:
+      <select id="regionSelect">
+        <option value="KR">한국</option>
+        <option value="US">미국</option>
+        <option value="JP">일본</option>
+        <option value="GB">영국</option>
+        <option value="FR">프랑스</option>
+        <option value="DE">독일</option>
+        <option value="IN">인도</option>
+        <option value="BR">브라질</option>
+        <option value="CA">캐나다</option>
+        <option value="AU">호주</option>
+      </select>
+    </label>
+    <button id="loadKeywordRank">조회</button>
+    <div id="rankResults"></div>
+  </div>
+</div>
+<script type="module">
+import { getDailyTrends, getRelatedQueries } from 'https://cdn.jsdelivr.net/npm/google-trends-api-browser@1.1.1/+esm';
+
+const STORAGE_KEY='yt_api_key_v1';
+function getApiKey(){return localStorage.getItem(STORAGE_KEY)||prompt('API 키를 입력하세요');}
+let allResults=[];
+
+async function doSearch(){
+  const API_KEY=getApiKey();
+  const q=document.getElementById('query').value.trim();
+  const max=document.getElementById('maxResults').value;
+  const order=document.getElementById('sortSelect').value;
+  const range=document.getElementById('timeRange').value;
+  if(!q){alert('검색어를 입력하세요');return;}
+
+  let publishedAfter='';
+  if(range){
+    const now=new Date();
+    switch(range){
+      case'hour':now.setHours(now.getHours()-1);break;
+      case'day':now.setDate(now.getDate()-1);break;
+      case'week':now.setDate(now.getDate()-7);break;
+      case'month':now.setMonth(now.getMonth()-1);break;
+      case'year':now.setFullYear(now.getFullYear()-1);break;
+    }
+    publishedAfter=now.toISOString();
+  }
+
+  document.getElementById('status').textContent='검색 중...';
+  const params=new URLSearchParams({key:API_KEY,q,part:'snippet',type:'video',maxResults:max,order});
+  if(publishedAfter)params.set('publishedAfter',publishedAfter);
+
+  const res=await fetch('https://www.googleapis.com/youtube/v3/search?'+params);
+  const data=await res.json();
+  const ids=data.items.map(i=>i.id.videoId).join(',');
+  const vres=await fetch('https://www.googleapis.com/youtube/v3/videos?'+new URLSearchParams({key:API_KEY,id:ids,part:'snippet,statistics,contentDetails'}));
+  const vdata=await vres.json();
+  allResults=vdata.items;
+  renderResults(allResults);
+}
+
+function formatDuration(duration){
+  const match=duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if(!match) return '';
+  const [_,h,m,s]=match.map(x=>parseInt(x)||0);
+  return (h>0? h+':':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+function renderResults(items){
+  const results=document.getElementById('results');
+  results.innerHTML='';
+  items.forEach(it=>{
+    const s=it.snippet,st=it.statistics,cd=it.contentDetails;
+    const div=document.createElement('div');div.className='card';
+    const duration=formatDuration(cd.duration);
+    div.innerHTML=`
+      <div class="thumb">
+        <a href="https://www.youtube.com/watch?v=${it.id}" target="_blank">
+          <img src="${s.thumbnails.medium.url}"/>
+          <div class="duration">${duration}</div>
+        </a>
+        <a class="title" href="https://www.youtube.com/watch?v=${it.id}" target="_blank">${s.title}</a>
+      </div>
+      <div class="meta">${new Date(s.publishedAt).toLocaleDateString('ko-KR')}</div>
+      <div class="meta">${st.viewCount?Number(st.viewCount).toLocaleString()+'회':''}</div>
+      <div class="tags">${s.tags?'태그: '+s.tags.join(', '):'태그: —'}</div>
+      <div class="desc">${s.description?s.description.substring(0,120)+'...':'설명 없음'}</div>`;
+    results.appendChild(div);
+  });
+  document.getElementById('status').textContent=`${items.length}개 결과 표시`;
+}
+
+document.getElementById('searchBtn').addEventListener('click',doSearch);
+document.getElementById('sortViews').addEventListener('click',()=>{
+  const sorted=[...allResults].sort((a,b)=>(+b.statistics.viewCount)-(+a.statistics.viewCount));
+  renderResults(sorted);
+});
+document.getElementById('sortDate').addEventListener('click',()=>{
+  const sorted=[...allResults].sort((a,b)=>new Date(b.snippet.publishedAt)-new Date(a.snippet.publishedAt));
+  renderResults(sorted);
+});
+
+document.getElementById('downloadExcel').addEventListener('click',()=>{
+  if(allResults.length===0){alert('결과가 없습니다');return;}
+  const wb=XLSX.utils.book_new();
+  const ws_data=[['제목','URL','게시일','조회수','태그','설명']];
+  allResults.forEach(v=>{
+    ws_data.push([
+      v.snippet.title,
+      `https://www.youtube.com/watch?v=${v.id}`,
+      new Date(v.snippet.publishedAt).toLocaleString('ko-KR'),
+      v.statistics.viewCount||'0',
+      v.snippet.tags?v.snippet.tags.join(', '):'',
+      v.snippet.description.replace(/\n/g,' ')
+    ]);
+  });
+  const ws=XLSX.utils.aoa_to_sheet(ws_data);
+  XLSX.utils.book_append_sheet(wb,ws,'YouTube Results');
+  XLSX.writeFile(wb,'youtube_results.xlsx');
+});
+
+// 키워드 순위 보기 (Google Trends 연동)
+const keywordBtn=document.getElementById('keywordRankBtn');
+const panel=document.getElementById('keywordPanel');
+keywordBtn.addEventListener('click',()=>{
+  panel.style.display=panel.style.display==='none'||panel.style.display===''?'block':'none';
+});
+
+document.getElementById('loadKeywordRank').addEventListener('click',async()=>{
+  const period=document.getElementById('rankRange').value;
+  const region=document.getElementById('regionSelect').value;
+  const query=document.getElementById('query').value.trim();
+  const rankDiv=document.getElementById('rankResults');
+  rankDiv.innerHTML='<p>Google 트렌드 데이터를 불러오는 중...</p>';
+
+  try{
+    const trends=await getDailyTrends({geo:region});
+    const json=JSON.parse(trends);
+    const list=json.default.trendingSearchesDays[0].trendingSearches.map((v,i)=>({rank:i+1,keyword:v.title.query}));
+
+    // 입력 키워드의 순위 계산
+    const idx=list.findIndex(v=>v.keyword.includes(query));
+    let msg='';
+    if(idx!==-1){msg=`입력한 키워드(“${query}”)는 ${idx+1}위에 있습니다.`;}else{msg='입력한 키워드는 현재 상위 트렌드에 없습니다.';}
+
+    // 관련 키워드
+    const related=await getRelatedQueries({keyword:query,geo:region,time:period});
+    const rjson=JSON.parse(related);
+    const rel=rjson.default.rankedList[0].rankedKeyword.map((v,i)=>({rank:i+1,keyword:v.query,score:v.value[0]}));
+
+    rankDiv.innerHTML=`<p>${msg}</p><h4>현재 트렌드 키워드 TOP10</h4>`+
+      list.slice(0,10).map(v=>`<div class='rank-item'><span>${v.rank}. ${v.keyword}</span></div>`).join('')+
+      `<h4>관련 키워드</h4>`+
+      rel.slice(0,10).map(v=>`<div class='rank-item'><span>${v.rank}. ${v.keyword}</span><span>${v.score}</span></div>`).join('');
+  }catch(e){
+    rankDiv.innerHTML='<p>Google 트렌드 데이터를 불러오는데 실패했습니다.</p>';
+    console.error(e);
+  }
+});
+</script>
+</body>
+</html>
